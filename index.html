@@ -2,223 +2,154 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>YouTube HTTPS Wrapper</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+  />
+  <title>YouTube Player Wrapper</title>
+
   <style>
     * {
       box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
     }
 
     html, body {
       margin: 0;
       padding: 0;
       width: 100%;
-      min-height: 100%;
-      background: #0b0f19;
-      color: #fff;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
       font-family: Arial, sans-serif;
-      overflow-x: hidden;
     }
 
     body {
-      display: flex;
-      flex-direction: column;
+      position: fixed;
+      inset: 0;
     }
 
-    .topbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      padding: 10px;
-      background: #111827;
-      border-bottom: 1px solid #243041;
-      width: 100%;
-    }
-
-    input,
-    button {
-      width: 100%;
-      min-width: 0;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      background: #0f172a;
-      color: white;
-      font-size: 14px;
-    }
-
-    input::placeholder {
-      color: #94a3b8;
-    }
-
-    button {
-      cursor: pointer;
-      background: #2563eb;
-      border: none;
-      font-weight: 600;
-    }
-
-    .input-video {
-      flex: 1 1 100%;
-    }
-
-    .input-endpoint {
-      flex: 1 1 100%;
-    }
-
-    .btn-half {
-      flex: 1 1 calc(50% - 4px);
+    #app {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      overflow: hidden;
     }
 
     #player-wrap {
+      position: absolute;
+      inset: 0;
       width: 100%;
-      aspect-ratio: 16 / 9;
-      background: black;
-      max-height: 42vh;
-      min-height: 180px;
+      height: 100%;
+      background: #000;
     }
 
     #player {
+      position: absolute;
+      inset: 0;
       width: 100%;
       height: 100%;
     }
 
-    .status {
-      padding: 10px 12px;
-      font-size: 14px;
-      color: #cbd5e1;
-      background: #0f172a;
-      border-top: 1px solid #243041;
-      white-space: pre-wrap;
+    .debug {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: max(10px, env(safe-area-inset-bottom));
+      z-index: 20;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.4;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
       word-break: break-word;
-      min-height: 52px;
     }
 
-    @media (min-width: 768px) {
-      .topbar {
-        padding: 12px;
-      }
+    .debug.show {
+      opacity: 1;
+    }
 
-      .input-video {
-        flex: 1 1 280px;
-      }
-
-      .input-endpoint {
-        flex: 1 1 320px;
-      }
-
-      .btn-half {
-        flex: 0 0 auto;
-        width: auto;
-        min-width: 140px;
-      }
-
-      #player-wrap {
-        max-height: 70vh;
-        min-height: 320px;
+    @media (orientation: portrait) {
+      #player-wrap,
+      #player {
+        width: 100vw;
+        height: 100vh;
       }
     }
 
-    @media (max-width: 480px) {
-      .topbar {
-        padding: 8px;
-        gap: 6px;
-      }
-
-      input,
-      button {
-        font-size: 13px;
-        padding: 10px;
-      }
-
-      #player-wrap {
-        min-height: 160px;
-        max-height: 34vh;
-      }
-
-      .status {
-        font-size: 13px;
-        padding: 8px 10px;
+    @media (orientation: landscape) {
+      #player-wrap,
+      #player {
+        width: 100vw;
+        height: 100vh;
       }
     }
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <input
-      id="videoInput"
-      class="input-video"
-      type="text"
-      placeholder="ID ou URL YouTube"
-    />
+  <div id="app">
+    <div id="player-wrap">
+      <div id="player"></div>
+    </div>
 
-    <input
-      id="fivemEndpoint"
-      class="input-endpoint"
-      type="text"
-      placeholder="https://ton-domaine.tld/musicbridge/event"
-    />
-
-    <button id="loadBtn" class="btn-half">Charger</button>
-    <button id="notifyBtn" class="btn-half">Notifier FiveM</button>
+    <div id="debug" class="debug"></div>
   </div>
-
-  <div id="player-wrap">
-    <div id="player"></div>
-  </div>
-
-  <div class="status" id="status">Prêt.</div>
 
   <script>
-    const statusEl = document.getElementById('status');
-    const videoInput = document.getElementById('videoInput');
-    const fivemEndpointInput = document.getElementById('fivemEndpoint');
-    const loadBtn = document.getElementById('loadBtn');
-    const notifyBtn = document.getElementById('notifyBtn');
-
     let player = null;
+    let playerReady = false;
+    let pendingCommand = null;
     let currentVideoId = null;
-    let currentState = -1;
 
-    function setStatus(message) {
-      statusEl.textContent = message;
+    const debugEl = document.getElementById("debug");
+
+    function showDebug(message) {
+      debugEl.textContent = message;
+      debugEl.classList.add("show");
+
+      clearTimeout(showDebug._t);
+      showDebug._t = setTimeout(() => {
+        debugEl.classList.remove("show");
+      }, 2500);
     }
 
-    function persist() {
-      localStorage.setItem('yt_video_input', videoInput.value.trim());
-      localStorage.setItem('yt_fivem_endpoint', fivemEndpointInput.value.trim());
+    function getOrigin() {
+      return window.location.origin;
     }
 
-    function restore() {
-      videoInput.value = localStorage.getItem('yt_video_input') || '';
-      fivemEndpointInput.value = localStorage.getItem('yt_fivem_endpoint') || '';
+    function isValidVideoId(id) {
+      return typeof id === "string" && /^[a-zA-Z0-9_-]{11}$/.test(id);
     }
 
     function extractVideoId(input) {
-      const value = (input || '').trim();
+      const value = (input || "").trim();
       if (!value) return null;
 
-      if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
-        return value;
-      }
+      if (isValidVideoId(value)) return value;
 
       try {
         const url = new URL(value);
 
-        if (url.hostname.includes('youtu.be')) {
-          const id = url.pathname.replace('/', '').trim();
-          if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id;
+        if (url.hostname.includes("youtu.be")) {
+          const id = url.pathname.replace("/", "").trim();
+          if (isValidVideoId(id)) return id;
         }
 
-        if (url.hostname.includes('youtube.com')) {
-          const v = url.searchParams.get('v');
-          if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+        if (url.hostname.includes("youtube.com")) {
+          const v = url.searchParams.get("v");
+          if (isValidVideoId(v)) return v;
 
-          const parts = url.pathname.split('/').filter(Boolean);
-          const embedIndex = parts.indexOf('embed');
+          const parts = url.pathname.split("/").filter(Boolean);
+          const embedIndex = parts.indexOf("embed");
           if (embedIndex !== -1 && parts[embedIndex + 1]) {
             const id = parts[embedIndex + 1];
-            if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id;
+            if (isValidVideoId(id)) return id;
           }
         }
       } catch (_) {}
@@ -226,129 +157,248 @@
       return null;
     }
 
-    function getOrigin() {
-      return window.location.origin;
+    function parseBool(value, fallback = false) {
+      if (value === true || value === "true" || value === "1" || value === 1) return true;
+      if (value === false || value === "false" || value === "0" || value === 0) return false;
+      return fallback;
     }
 
-    function stateToLabel(state) {
-      switch (state) {
-        case -1: return 'unstarted';
-        case 0: return 'ended';
-        case 1: return 'playing';
-        case 2: return 'paused';
-        case 3: return 'buffering';
-        case 5: return 'cued';
-        default: return 'unknown';
-      }
+    function parseNumber(value, fallback = 0) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
     }
 
-    function loadVideo() {
-      const id = extractVideoId(videoInput.value);
-      if (!id) {
-        setStatus('ID ou URL YouTube invalide.');
+    function getUrlConfig() {
+      const url = new URL(window.location.href);
+      const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+      const hashParams = new URLSearchParams(hash);
+      const searchParams = url.searchParams;
+
+      const rawVideo =
+        searchParams.get("videoId") ||
+        searchParams.get("v") ||
+        hashParams.get("videoId") ||
+        hashParams.get("v");
+
+      return {
+        videoId: extractVideoId(rawVideo),
+        autoplay: parseBool(
+          searchParams.get("autoplay") ?? hashParams.get("autoplay"),
+          true
+        ),
+        startSeconds: parseNumber(
+          searchParams.get("start") ?? hashParams.get("start"),
+          0
+        )
+      };
+    }
+
+    function ensurePlayerReady(fn) {
+      if (playerReady && player) {
+        fn();
         return;
       }
 
-      persist();
+      pendingCommand = fn;
+      showDebug("Player pas encore prêt");
+    }
+
+    function flushPendingCommand() {
+      if (pendingCommand) {
+        const cmd = pendingCommand;
+        pendingCommand = null;
+        cmd();
+      }
+    }
+
+    function loadVideo(videoId, autoplay = true, startSeconds = 0) {
+      const id = extractVideoId(videoId);
+      if (!id) {
+        showDebug("videoId invalide");
+        return;
+      }
+
       currentVideoId = id;
 
-      if (player && typeof player.loadVideoById === 'function') {
-        player.loadVideoById(id);
-        setStatus(`Vidéo chargée : ${id}`);
-      } else {
-        setStatus('Player YouTube pas encore prêt, réessaie dans une seconde.');
+      ensurePlayerReady(() => {
+        if (autoplay) {
+          player.loadVideoById({
+            videoId: id,
+            startSeconds: Math.max(0, Number(startSeconds) || 0)
+          });
+        } else {
+          player.cueVideoById({
+            videoId: id,
+            startSeconds: Math.max(0, Number(startSeconds) || 0)
+          });
+        }
+
+        showDebug(`Vidéo chargée : ${id}`);
+      });
+    }
+
+    function playVideo() {
+      ensurePlayerReady(() => player.playVideo());
+    }
+
+    function pauseVideo() {
+      ensurePlayerReady(() => player.pauseVideo());
+    }
+
+    function stopVideo() {
+      ensurePlayerReady(() => player.stopVideo());
+    }
+
+    function seekTo(seconds, allowSeekAhead = true) {
+      ensurePlayerReady(() => player.seekTo(Math.max(0, Number(seconds) || 0), allowSeekAhead));
+    }
+
+    function mute() {
+      ensurePlayerReady(() => player.mute());
+    }
+
+    function unmute() {
+      ensurePlayerReady(() => player.unMute());
+    }
+
+    function setVolume(volume) {
+      ensurePlayerReady(() => {
+        const safeVolume = Math.max(0, Math.min(100, Number(volume) || 0));
+        player.setVolume(safeVolume);
+      });
+    }
+
+    function handleIncomingMessage(data) {
+      if (!data || typeof data !== "object") return;
+
+      switch (data.action) {
+        case "load":
+          loadVideo(
+            data.videoId || data.url,
+            parseBool(data.autoplay, true),
+            parseNumber(data.startSeconds, 0)
+          );
+          break;
+
+        case "play":
+          playVideo();
+          break;
+
+        case "pause":
+          pauseVideo();
+          break;
+
+        case "stop":
+          stopVideo();
+          break;
+
+        case "seek":
+          seekTo(data.seconds, data.allowSeekAhead !== false);
+          break;
+
+        case "mute":
+          mute();
+          break;
+
+        case "unmute":
+          unmute();
+          break;
+
+        case "setVolume":
+          setVolume(data.volume);
+          break;
+
+        default:
+          showDebug(`Action inconnue : ${data.action}`);
+          break;
       }
     }
 
-    async function notifyFiveM(eventName = 'manual_notify') {
-      const endpoint = fivemEndpointInput.value.trim();
-      if (!endpoint) {
-        setStatus('Endpoint FiveM manquant.');
-        return;
+    window.addEventListener("message", (event) => {
+      handleIncomingMessage(event.data);
+    });
+
+    window.addEventListener("hashchange", () => {
+      const config = getUrlConfig();
+      if (config.videoId) {
+        loadVideo(config.videoId, config.autoplay, config.startSeconds);
       }
+    });
 
-      if (!currentVideoId) {
-        setStatus('Aucune vidéo chargée.');
-        return;
-      }
-
-      persist();
-
-      const payload = {
-        event: eventName,
-        videoId: currentVideoId,
-        url: `https://www.youtube.com/watch?v=${currentVideoId}`,
-        embedUrl: `https://www.youtube.com/embed/${currentVideoId}?enablejsapi=1&origin=${encodeURIComponent(getOrigin())}`,
-        origin: getOrigin(),
-        playerState: currentState,
-        playerStateLabel: stateToLabel(currentState),
-        at: new Date().toISOString()
-      };
+    function notifyHost(type, payload = {}) {
+      const message = { type, ...payload };
 
       try {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
+        window.parent.postMessage(message, "*");
+      } catch (_) {}
 
-        const text = await res.text();
-        if (!res.ok) {
-          throw new Error(text || `HTTP ${res.status}`);
-        }
-
-        setStatus(`Notification envoyée à FiveM.\n${text}`);
-      } catch (err) {
-        setStatus(`Erreur envoi FiveM : ${err.message}`);
-      }
+      try {
+        window.postMessage(message, "*");
+      } catch (_) {}
     }
 
     window.onYouTubeIframeAPIReady = function () {
-      player = new YT.Player('player', {
-        width: '100%',
-        height: '100%',
-        videoId: extractVideoId(videoInput.value) || 'dQw4w9WgXcQ',
+      const initial = getUrlConfig();
+
+      player = new YT.Player("player", {
+        width: "100%",
+        height: "100%",
+        videoId: initial.videoId || "dQw4w9WgXcQ",
         playerVars: {
-          autoplay: 0,
+          autoplay: initial.autoplay ? 1 : 0,
           controls: 1,
+          disablekb: 0,
+          fs: 1,
+          playsinline: 1,
+          rel: 0,
+          modestbranding: 1,
           enablejsapi: 1,
           origin: getOrigin(),
-          rel: 0
+          start: Math.max(0, initial.startSeconds || 0)
         },
         events: {
           onReady: () => {
-            currentVideoId = extractVideoId(videoInput.value) || 'dQw4w9WgXcQ';
-            setStatus(`Player prêt sur origin ${getOrigin()}`);
-          },
-          onStateChange: (event) => {
-            currentState = event.data;
-
+            playerReady = true;
             try {
-              const data = player.getVideoData ? player.getVideoData() : null;
-              if (data && data.video_id) {
-                currentVideoId = data.video_id;
-              }
+              const data = player.getVideoData?.();
+              if (data?.video_id) currentVideoId = data.video_id;
             } catch (_) {}
 
-            setStatus(`État player : ${stateToLabel(currentState)} (${currentState})`);
+            showDebug(`Player prêt : ${getOrigin()}`);
+            notifyHost("playerReady", {
+              origin: getOrigin(),
+              videoId: currentVideoId
+            });
+
+            flushPendingCommand();
           },
+
+          onStateChange: (event) => {
+            try {
+              const data = player.getVideoData?.();
+              if (data?.video_id) currentVideoId = data.video_id;
+            } catch (_) {}
+
+            notifyHost("playerStateChange", {
+              state: event.data,
+              videoId: currentVideoId
+            });
+          },
+
           onError: (event) => {
-            setStatus(`Erreur YouTube iframe : ${event.data}`);
+            showDebug(`Erreur YouTube : ${event.data}`);
+            notifyHost("playerError", {
+              error: event.data,
+              videoId: currentVideoId
+            });
           }
         }
       });
     };
 
-    loadBtn.addEventListener('click', loadVideo);
-    notifyBtn.addEventListener('click', () => notifyFiveM('manual_notify'));
-
-    restore();
-
-    const script = document.createElement('script');
-    script.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(script);
+    const tag = document.createElement("script");
+    tag.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(tag);
   </script>
 </body>
 </html>
