@@ -211,7 +211,7 @@
       }
     }
 
-    function loadVideo(videoId, autoplay = true, startSeconds = 0) {
+    function loadVideo(videoId, autoplay = false, startSeconds = 0) {
       const id = extractVideoId(videoId);
       if (!id) {
         showDebug("videoId invalide");
