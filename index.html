@@ -2,26 +2,43 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>YouTube HTTPS Wrapper</title>
   <style>
-    body {
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
       margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
       background: #0b0f19;
       color: #fff;
       font-family: Arial, sans-serif;
+      overflow-x: hidden;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
     }
 
     .topbar {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
-      padding: 12px;
+      padding: 10px;
       background: #111827;
       border-bottom: 1px solid #243041;
-      flex-wrap: wrap;
+      width: 100%;
     }
 
-    input, button {
+    input,
+    button {
+      width: 100%;
+      min-width: 0;
       padding: 10px 12px;
       border-radius: 8px;
       border: 1px solid #334155;
@@ -30,16 +47,35 @@
       font-size: 14px;
     }
 
+    input::placeholder {
+      color: #94a3b8;
+    }
+
     button {
       cursor: pointer;
       background: #2563eb;
       border: none;
+      font-weight: 600;
+    }
+
+    .input-video {
+      flex: 1 1 100%;
+    }
+
+    .input-endpoint {
+      flex: 1 1 100%;
+    }
+
+    .btn-half {
+      flex: 1 1 calc(50% - 4px);
     }
 
     #player-wrap {
       width: 100%;
       aspect-ratio: 16 / 9;
       background: black;
+      max-height: 42vh;
+      min-height: 180px;
     }
 
     #player {
@@ -54,15 +90,77 @@
       background: #0f172a;
       border-top: 1px solid #243041;
       white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 52px;
+    }
+
+    @media (min-width: 768px) {
+      .topbar {
+        padding: 12px;
+      }
+
+      .input-video {
+        flex: 1 1 280px;
+      }
+
+      .input-endpoint {
+        flex: 1 1 320px;
+      }
+
+      .btn-half {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 140px;
+      }
+
+      #player-wrap {
+        max-height: 70vh;
+        min-height: 320px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .topbar {
+        padding: 8px;
+        gap: 6px;
+      }
+
+      input,
+      button {
+        font-size: 13px;
+        padding: 10px;
+      }
+
+      #player-wrap {
+        min-height: 160px;
+        max-height: 34vh;
+      }
+
+      .status {
+        font-size: 13px;
+        padding: 8px 10px;
+      }
     }
   </style>
 </head>
 <body>
   <div class="topbar">
-    <input id="videoInput" type="text" placeholder="ID ou URL YouTube" style="flex:1; min-width: 280px;" />
-    <input id="fivemEndpoint" type="text" placeholder="https://ton-domaine.tld/musicbridge/event" style="flex:1; min-width: 280px;" />
-    <button id="loadBtn">Charger</button>
-    <button id="notifyBtn">Notifier FiveM</button>
+    <input
+      id="videoInput"
+      class="input-video"
+      type="text"
+      placeholder="ID ou URL YouTube"
+    />
+
+    <input
+      id="fivemEndpoint"
+      class="input-endpoint"
+      type="text"
+      placeholder="https://ton-domaine.tld/musicbridge/event"
+    />
+
+    <button id="loadBtn" class="btn-half">Charger</button>
+    <button id="notifyBtn" class="btn-half">Notifier FiveM</button>
   </div>
 
   <div id="player-wrap">
