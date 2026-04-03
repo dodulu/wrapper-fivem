@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube HTTPS Wrapper</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0b0f19;
+      color: #fff;
+      font-family: Arial, sans-serif;
+    }
+
+    .topbar {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      background: #111827;
+      border-bottom: 1px solid #243041;
+      flex-wrap: wrap;
+    }
+
+    input, button {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: white;
+      font-size: 14px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #2563eb;
+      border: none;
+    }
+
+    #player-wrap {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: black;
+    }
+
+    #player {
+      width: 100%;
+      height: 100%;
+    }
+
+    .status {
+      padding: 10px 12px;
+      font-size: 14px;
+      color: #cbd5e1;
+      background: #0f172a;
+      border-top: 1px solid #243041;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <input id="videoInput" type="text" placeholder="ID ou URL YouTube" style="flex:1; min-width: 280px;" />
+    <input id="fivemEndpoint" type="text" placeholder="https://ton-domaine.tld/musicbridge/event" style="flex:1; min-width: 280px;" />
+    <button id="loadBtn">Charger</button>
+    <button id="notifyBtn">Notifier FiveM</button>
+  </div>
+
+  <div id="player-wrap">
+    <div id="player"></div>
+  </div>
+
+  <div class="status" id="status">Prêt.</div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const videoInput = document.getElementById('videoInput');
+    const fivemEndpointInput = document.getElementById('fivemEndpoint');
+    const loadBtn = document.getElementById('loadBtn');
+    const notifyBtn = document.getElementById('notifyBtn');
+
+    let player = null;
+    let currentVideoId = null;
+    let currentState = -1;
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function persist() {
+      localStorage.setItem('yt_video_input', videoInput.value.trim());
+      localStorage.setItem('yt_fivem_endpoint', fivemEndpointInput.value.trim());
+    }
+
+    function restore() {
+      videoInput.value = localStorage.getItem('yt_video_input') || '';
+      fivemEndpointInput.value = localStorage.getItem('yt_fivem_endpoint') || '';
+    }
+
+    function extractVideoId(input) {
+      const value = (input || '').trim();
+      if (!value) return null;
+
+      if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
+        return value;
+      }
+
+      try {
+        const url = new URL(value);
+
+        if (url.hostname.includes('youtu.be')) {
+          const id = url.pathname.replace('/', '').trim();
+          if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id;
+        }
+
+        if (url.hostname.includes('youtube.com')) {
+          const v = url.searchParams.get('v');
+          if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+
+          const parts = url.pathname.split('/').filter(Boolean);
+          const embedIndex = parts.indexOf('embed');
+          if (embedIndex !== -1 && parts[embedIndex + 1]) {
+            const id = parts[embedIndex + 1];
+            if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id;
+          }
+        }
+      } catch (_) {}
+
+      return null;
+    }
+
+    function getOrigin() {
+      return window.location.origin;
+    }
+
+    function stateToLabel(state) {
+      switch (state) {
+        case -1: return 'unstarted';
+        case 0: return 'ended';
+        case 1: return 'playing';
+        case 2: return 'paused';
+        case 3: return 'buffering';
+        case 5: return 'cued';
+        default: return 'unknown';
+      }
+    }
+
+    function loadVideo() {
+      const id = extractVideoId(videoInput.value);
+      if (!id) {
+        setStatus('ID ou URL YouTube invalide.');
+        return;
+      }
+
+      persist();
+      currentVideoId = id;
+
+      if (player && typeof player.loadVideoById === 'function') {
+        player.loadVideoById(id);
+        setStatus(`Vidéo chargée : ${id}`);
+      } else {
+        setStatus('Player YouTube pas encore prêt, réessaie dans une seconde.');
+      }
+    }
+
+    async function notifyFiveM(eventName = 'manual_notify') {
+      const endpoint = fivemEndpointInput.value.trim();
+      if (!endpoint) {
+        setStatus('Endpoint FiveM manquant.');
+        return;
+      }
+
+      if (!currentVideoId) {
+        setStatus('Aucune vidéo chargée.');
+        return;
+      }
+
+      persist();
+
+      const payload = {
+        event: eventName,
+        videoId: currentVideoId,
+        url: `https://www.youtube.com/watch?v=${currentVideoId}`,
+        embedUrl: `https://www.youtube.com/embed/${currentVideoId}?enablejsapi=1&origin=${encodeURIComponent(getOrigin())}`,
+        origin: getOrigin(),
+        playerState: currentState,
+        playerStateLabel: stateToLabel(currentState),
+        at: new Date().toISOString()
+      };
+
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const text = await res.text();
+        if (!res.ok) {
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+
+        setStatus(`Notification envoyée à FiveM.\n${text}`);
+      } catch (err) {
+        setStatus(`Erreur envoi FiveM : ${err.message}`);
+      }
+    }
+
+    window.onYouTubeIframeAPIReady = function () {
+      player = new YT.Player('player', {
+        width: '100%',
+        height: '100%',
+        videoId: extractVideoId(videoInput.value) || 'dQw4w9WgXcQ',
+        playerVars: {
+          autoplay: 0,
+          controls: 1,
+          enablejsapi: 1,
+          origin: getOrigin(),
+          rel: 0
+        },
+        events: {
+          onReady: () => {
+            currentVideoId = extractVideoId(videoInput.value) || 'dQw4w9WgXcQ';
+            setStatus(`Player prêt sur origin ${getOrigin()}`);
+          },
+          onStateChange: (event) => {
+            currentState = event.data;
+
+            try {
+              const data = player.getVideoData ? player.getVideoData() : null;
+              if (data && data.video_id) {
+                currentVideoId = data.video_id;
+              }
+            } catch (_) {}
+
+            setStatus(`État player : ${stateToLabel(currentState)} (${currentState})`);
+          },
+          onError: (event) => {
+            setStatus(`Erreur YouTube iframe : ${event.data}`);
+          }
+        }
+      });
+    };
+
+    loadBtn.addEventListener('click', loadVideo);
+    notifyBtn.addEventListener('click', () => notifyFiveM('manual_notify'));
+
+    restore();
+
+    const script = document.createElement('script');
+    script.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(script);
+  </script>
+</body>
+</html>
