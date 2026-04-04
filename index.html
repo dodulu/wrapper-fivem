@@ -104,13 +104,13 @@
   <script>
     let player = null;
     let playerReady = false;
-    let pendingCommand = null;
     let currentVideoId = null;
+    let pendingCommands = [];
 
     const debugEl = document.getElementById("debug");
 
     function showDebug(message) {
-      debugEl.textContent = message;
+      debugEl.textContent = String(message || "");
       debugEl.classList.add("show");
 
       clearTimeout(showDebug._t);
@@ -128,7 +128,7 @@
     }
 
     function extractVideoId(input) {
-      const value = (input || "").trim();
+      const value = String(input || "").trim();
       if (!value) return null;
 
       if (isValidVideoId(value)) return value;
@@ -151,6 +151,12 @@
             const id = parts[embedIndex + 1];
             if (isValidVideoId(id)) return id;
           }
+
+          const shortsIndex = parts.indexOf("shorts");
+          if (shortsIndex !== -1 && parts[shortsIndex + 1]) {
+            const id = parts[shortsIndex + 1];
+            if (isValidVideoId(id)) return id;
+          }
         }
       } catch (_) {}
 
@@ -166,6 +172,12 @@
     function parseNumber(value, fallback = 0) {
       const n = Number(value);
       return Number.isFinite(n) ? n : fallback;
+    }
+
+    function clamp(value, min, max, fallback = min) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(max, Math.max(min, n));
     }
 
     function getUrlConfig() {
@@ -184,87 +196,269 @@
         videoId: extractVideoId(rawVideo),
         autoplay: parseBool(
           searchParams.get("autoplay") ?? hashParams.get("autoplay"),
-          true
+          false
         ),
         startSeconds: parseNumber(
           searchParams.get("start") ?? hashParams.get("start"),
           0
+        ),
+        mute: parseBool(
+          searchParams.get("mute") ?? hashParams.get("mute"),
+          false
+        ),
+        volume: clamp(
+          searchParams.get("volume") ?? hashParams.get("volume"),
+          0,
+          100,
+          100
         )
       };
     }
 
-    function ensurePlayerReady(fn) {
+    function notifyHost(type, payload = {}) {
+      const message = { type, ...payload };
+
+      try {
+        window.parent.postMessage(message, "*");
+      } catch (_) {}
+
+      try {
+        window.postMessage(message, "*");
+      } catch (_) {}
+    }
+
+    function getPlayerStateName(state) {
+      if (!window.YT || !window.YT.PlayerState) return "unknown";
+
+      switch (state) {
+        case YT.PlayerState.UNSTARTED: return "unstarted";
+        case YT.PlayerState.ENDED: return "ended";
+        case YT.PlayerState.PLAYING: return "playing";
+        case YT.PlayerState.PAUSED: return "paused";
+        case YT.PlayerState.BUFFERING: return "buffering";
+        case YT.PlayerState.CUED: return "cued";
+        default: return "unknown";
+      }
+    }
+
+    function queueOrRun(fn, reason = "Player pas encore prêt") {
       if (playerReady && player) {
         fn();
         return;
       }
 
-      pendingCommand = fn;
-      showDebug("Player pas encore prêt");
+      pendingCommands.push(fn);
+      showDebug(reason);
     }
 
-    function flushPendingCommand() {
-      if (pendingCommand) {
-        const cmd = pendingCommand;
-        pendingCommand = null;
-        cmd();
+    function flushPendingCommands() {
+      if (!playerReady || !player || pendingCommands.length === 0) return;
+
+      const commands = [...pendingCommands];
+      pendingCommands = [];
+
+      for (const cmd of commands) {
+        try {
+          cmd();
+        } catch (err) {
+          console.error("Erreur commande en attente :", err);
+        }
       }
+    }
+
+    function refreshCurrentVideoId() {
+      if (!player) return;
+
+      try {
+        const data = player.getVideoData?.();
+        if (data?.video_id) {
+          currentVideoId = data.video_id;
+        }
+      } catch (_) {}
     }
 
     function loadVideo(videoId, autoplay = false, startSeconds = 0) {
       const id = extractVideoId(videoId);
       if (!id) {
         showDebug("videoId invalide");
+        notifyHost("playerError", {
+          error: "INVALID_VIDEO_ID",
+          input: videoId
+        });
         return;
       }
 
       currentVideoId = id;
 
-      ensurePlayerReady(() => {
+      queueOrRun(() => {
+        const safeStartSeconds = Math.max(0, Number(startSeconds) || 0);
+
         if (autoplay) {
           player.loadVideoById({
             videoId: id,
-            startSeconds: Math.max(0, Number(startSeconds) || 0)
+            startSeconds: safeStartSeconds
           });
         } else {
           player.cueVideoById({
             videoId: id,
-            startSeconds: Math.max(0, Number(startSeconds) || 0)
+            startSeconds: safeStartSeconds
           });
         }
 
         showDebug(`Vidéo chargée : ${id}`);
+        notifyHost("videoLoaded", {
+          videoId: id,
+          autoplay: !!autoplay,
+          startSeconds: safeStartSeconds
+        });
       });
     }
 
     function playVideo() {
-      ensurePlayerReady(() => player.playVideo());
+      queueOrRun(() => {
+        player.playVideo();
+        refreshCurrentVideoId();
+      });
     }
 
     function pauseVideo() {
-      ensurePlayerReady(() => player.pauseVideo());
+      queueOrRun(() => {
+        player.pauseVideo();
+      });
     }
 
     function stopVideo() {
-      ensurePlayerReady(() => player.stopVideo());
+      queueOrRun(() => {
+        player.stopVideo();
+      });
     }
 
     function seekTo(seconds, allowSeekAhead = true) {
-      ensurePlayerReady(() => player.seekTo(Math.max(0, Number(seconds) || 0), allowSeekAhead));
+      queueOrRun(() => {
+        player.seekTo(Math.max(0, Number(seconds) || 0), allowSeekAhead !== false);
+      });
     }
 
     function mute() {
-      ensurePlayerReady(() => player.mute());
+      queueOrRun(() => {
+        player.mute();
+        notifyHost("muteChanged", { muted: true });
+      });
     }
 
     function unmute() {
-      ensurePlayerReady(() => player.unMute());
+      queueOrRun(() => {
+        player.unMute();
+        notifyHost("muteChanged", { muted: false });
+      });
+    }
+
+    function toggleMute() {
+      queueOrRun(() => {
+        if (player.isMuted()) {
+          player.unMute();
+          notifyHost("muteChanged", { muted: false });
+        } else {
+          player.mute();
+          notifyHost("muteChanged", { muted: true });
+        }
+      });
     }
 
     function setVolume(volume) {
-      ensurePlayerReady(() => {
-        const safeVolume = Math.max(0, Math.min(100, Number(volume) || 0));
+      queueOrRun(() => {
+        const safeVolume = clamp(volume, 0, 100, 100);
         player.setVolume(safeVolume);
+        notifyHost("volumeChanged", { volume: safeVolume });
+      });
+    }
+
+    function setPlaybackRate(rate) {
+      queueOrRun(() => {
+        const safeRate = Number(rate);
+        const availableRates = player.getAvailablePlaybackRates?.() || [];
+
+        if (!Number.isFinite(safeRate)) {
+          showDebug("Vitesse invalide");
+          return;
+        }
+
+        if (availableRates.length > 0 && !availableRates.includes(safeRate)) {
+          showDebug(`Vitesse indisponible : ${safeRate}`);
+          notifyHost("playerError", {
+            error: "INVALID_PLAYBACK_RATE",
+            requestedRate: safeRate,
+            availableRates
+          });
+          return;
+        }
+
+        player.setPlaybackRate(safeRate);
+        notifyHost("playbackRateChanged", { rate: safeRate });
+      });
+    }
+
+    function getStatus() {
+      queueOrRun(() => {
+        refreshCurrentVideoId();
+
+        let payload = {
+          videoId: currentVideoId,
+          ready: playerReady,
+          state: null,
+          stateName: "unknown",
+          currentTime: 0,
+          duration: 0,
+          volume: 100,
+          muted: false,
+          playbackRate: 1
+        };
+
+        try {
+          const state = player.getPlayerState?.();
+          payload.state = state;
+          payload.stateName = getPlayerStateName(state);
+        } catch (_) {}
+
+        try {
+          payload.currentTime = player.getCurrentTime?.() || 0;
+        } catch (_) {}
+
+        try {
+          payload.duration = player.getDuration?.() || 0;
+        } catch (_) {}
+
+        try {
+          payload.volume = player.getVolume?.() ?? 100;
+        } catch (_) {}
+
+        try {
+          payload.muted = !!player.isMuted?.();
+        } catch (_) {}
+
+        try {
+          payload.playbackRate = player.getPlaybackRate?.() ?? 1;
+        } catch (_) {}
+
+        notifyHost("playerStatus", payload);
+      });
+    }
+
+    function getCurrentTime() {
+      queueOrRun(() => {
+        notifyHost("playerCurrentTime", {
+          currentTime: player.getCurrentTime?.() || 0,
+          videoId: currentVideoId
+        });
+      });
+    }
+
+    function getDuration() {
+      queueOrRun(() => {
+        notifyHost("playerDuration", {
+          duration: player.getDuration?.() || 0,
+          videoId: currentVideoId
+        });
       });
     }
 
@@ -275,7 +469,7 @@
         case "load":
           loadVideo(
             data.videoId || data.url,
-            parseBool(data.autoplay, true),
+            parseBool(data.autoplay, false),
             parseNumber(data.startSeconds, 0)
           );
           break;
@@ -304,12 +498,36 @@
           unmute();
           break;
 
+        case "toggleMute":
+          toggleMute();
+          break;
+
         case "setVolume":
           setVolume(data.volume);
           break;
 
+        case "setPlaybackRate":
+          setPlaybackRate(data.rate);
+          break;
+
+        case "status":
+          getStatus();
+          break;
+
+        case "getCurrentTime":
+          getCurrentTime();
+          break;
+
+        case "getDuration":
+          getDuration();
+          break;
+
         default:
           showDebug(`Action inconnue : ${data.action}`);
+          notifyHost("playerError", {
+            error: "UNKNOWN_ACTION",
+            action: data.action
+          });
           break;
       }
     }
@@ -325,27 +543,15 @@
       }
     });
 
-    function notifyHost(type, payload = {}) {
-      const message = { type, ...payload };
-
-      try {
-        window.parent.postMessage(message, "*");
-      } catch (_) {}
-
-      try {
-        window.postMessage(message, "*");
-      } catch (_) {}
-    }
-
     window.onYouTubeIframeAPIReady = function () {
       const initial = getUrlConfig();
 
       player = new YT.Player("player", {
         width: "100%",
         height: "100%",
-        videoId: initial.videoId || "dQw4w9WgXcQ",
+        videoId: initial.videoId || undefined,
         playerVars: {
-          autoplay: initial.autoplay ? 1 : 0,
+          autoplay: initial.videoId && initial.autoplay ? 1 : 0,
           controls: 1,
           disablekb: 0,
           fs: 1,
@@ -358,29 +564,38 @@
         },
         events: {
           onReady: () => {
-            playerReady = false;
+            playerReady = true;
+            refreshCurrentVideoId();
+
             try {
-              const data = player.getVideoData?.();
-              if (data?.video_id) currentVideoId = data.video_id;
+              player.setVolume(initial.volume);
+            } catch (_) {}
+
+            try {
+              if (initial.mute) player.mute();
+              else player.unMute();
             } catch (_) {}
 
             showDebug(`Player prêt : ${getOrigin()}`);
             notifyHost("playerReady", {
               origin: getOrigin(),
-              videoId: currentVideoId
+              videoId: currentVideoId,
+              autoplay: !!initial.autoplay
             });
 
-            flushPendingCommand();
+            flushPendingCommands();
+
+            if (!initial.autoplay) {
+              getStatus();
+            }
           },
 
           onStateChange: (event) => {
-            try {
-              const data = player.getVideoData?.();
-              if (data?.video_id) currentVideoId = data.video_id;
-            } catch (_) {}
+            refreshCurrentVideoId();
 
             notifyHost("playerStateChange", {
               state: event.data,
+              stateName: getPlayerStateName(event.data),
               videoId: currentVideoId
             });
           },
