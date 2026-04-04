@@ -102,517 +102,877 @@
   </div>
 
   <script>
-    let player = null;
-    let playerReady = false;
-    let currentVideoId = null;
-    let pendingCommands = [];
+  let player = null;
+  let playerReady = false;
+  let currentVideoId = null;
+  let currentPlaylistId = null;
+  let currentMediaType = null; // "video" | "playlist" | null
+  let pendingCommands = [];
 
-    const debugEl = document.getElementById("debug");
+  const debugEl = document.getElementById("debug");
 
-    function showDebug(message) {
-      debugEl.textContent = String(message || "");
-      debugEl.classList.add("show");
+  function showDebug(message) {
+    debugEl.textContent = String(message || "");
+    debugEl.classList.add("show");
 
-      clearTimeout(showDebug._t);
-      showDebug._t = setTimeout(() => {
-        debugEl.classList.remove("show");
-      }, 2500);
+    clearTimeout(showDebug._t);
+    showDebug._t = setTimeout(() => {
+      debugEl.classList.remove("show");
+    }, 2500);
+  }
+
+  function getOrigin() {
+    return window.location.origin;
+  }
+
+  function isValidVideoId(id) {
+    return typeof id === "string" && /^[a-zA-Z0-9_-]{11}$/.test(id);
+  }
+
+  function isLikelyPlaylistId(id) {
+    return (
+      typeof id === "string" &&
+      id.length >= 12 &&
+      /^[a-zA-Z0-9_-]+$/.test(id)
+    );
+  }
+
+  function parseBool(value, fallback = false) {
+    if (value === true || value === "true" || value === "1" || value === 1) return true;
+    if (value === false || value === "false" || value === "0" || value === 0) return false;
+    return fallback;
+  }
+
+  function parseNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function clamp(value, min, max, fallback = min) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function parseIndex(value, fallback = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return fallback;
+    return Math.floor(n);
+  }
+
+  function extractMedia(input) {
+    const value = String(input || "").trim();
+    if (!value) return null;
+
+    if (isValidVideoId(value)) {
+      return { type: "video", videoId: value };
     }
 
-    function getOrigin() {
-      return window.location.origin;
+    if (isLikelyPlaylistId(value) && !isValidVideoId(value)) {
+      return { type: "playlist", playlistId: value, index: 0 };
     }
 
-    function isValidVideoId(id) {
-      return typeof id === "string" && /^[a-zA-Z0-9_-]{11}$/.test(id);
-    }
+    try {
+      const url = new URL(value);
 
-    function extractVideoId(input) {
-      const value = String(input || "").trim();
-      if (!value) return null;
+      const host = url.hostname.replace(/^www\./, "");
+      const pathname = url.pathname || "";
+      const parts = pathname.split("/").filter(Boolean);
 
-      if (isValidVideoId(value)) return value;
+      const list = url.searchParams.get("list");
+      const v = url.searchParams.get("v");
+      const index = parseIndex(url.searchParams.get("index"), 0);
+      const start =
+        parseNumber(url.searchParams.get("start"), 0) ||
+        parseNumber(url.searchParams.get("t"), 0);
 
-      try {
-        const url = new URL(value);
+      if (host === "youtu.be") {
+        const id = pathname.replace("/", "").trim();
 
-        if (url.hostname.includes("youtu.be")) {
-          const id = url.pathname.replace("/", "").trim();
-          if (isValidVideoId(id)) return id;
+        if (list && isLikelyPlaylistId(list)) {
+          return {
+            type: "playlist",
+            playlistId: list,
+            videoId: isValidVideoId(id) ? id : null,
+            index,
+            startSeconds: start
+          };
         }
 
-        if (url.hostname.includes("youtube.com")) {
-          const v = url.searchParams.get("v");
-          if (isValidVideoId(v)) return v;
-
-          const parts = url.pathname.split("/").filter(Boolean);
-          const embedIndex = parts.indexOf("embed");
-          if (embedIndex !== -1 && parts[embedIndex + 1]) {
-            const id = parts[embedIndex + 1];
-            if (isValidVideoId(id)) return id;
-          }
-
-          const shortsIndex = parts.indexOf("shorts");
-          if (shortsIndex !== -1 && parts[shortsIndex + 1]) {
-            const id = parts[shortsIndex + 1];
-            if (isValidVideoId(id)) return id;
-          }
-        }
-      } catch (_) {}
-
-      return null;
-    }
-
-    function parseBool(value, fallback = false) {
-      if (value === true || value === "true" || value === "1" || value === 1) return true;
-      if (value === false || value === "false" || value === "0" || value === 0) return false;
-      return fallback;
-    }
-
-    function parseNumber(value, fallback = 0) {
-      const n = Number(value);
-      return Number.isFinite(n) ? n : fallback;
-    }
-
-    function clamp(value, min, max, fallback = min) {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return fallback;
-      return Math.min(max, Math.max(min, n));
-    }
-
-    function getUrlConfig() {
-      const url = new URL(window.location.href);
-      const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-      const hashParams = new URLSearchParams(hash);
-      const searchParams = url.searchParams;
-
-      const rawVideo =
-        searchParams.get("videoId") ||
-        searchParams.get("v") ||
-        hashParams.get("videoId") ||
-        hashParams.get("v");
-
-      return {
-        videoId: extractVideoId(rawVideo),
-        autoplay: parseBool(
-          searchParams.get("autoplay") ?? hashParams.get("autoplay"),
-          false
-        ),
-        startSeconds: parseNumber(
-          searchParams.get("start") ?? hashParams.get("start"),
-          0
-        ),
-        mute: parseBool(
-          searchParams.get("mute") ?? hashParams.get("mute"),
-          false
-        ),
-        volume: clamp(
-          searchParams.get("volume") ?? hashParams.get("volume"),
-          0,
-          100,
-          100
-        )
-      };
-    }
-
-    function notifyHost(type, payload = {}) {
-      const message = { type, ...payload };
-
-      try {
-        window.parent.postMessage(message, "*");
-      } catch (_) {}
-
-      try {
-        window.postMessage(message, "*");
-      } catch (_) {}
-    }
-
-    function getPlayerStateName(state) {
-      if (!window.YT || !window.YT.PlayerState) return "unknown";
-
-      switch (state) {
-        case YT.PlayerState.UNSTARTED: return "unstarted";
-        case YT.PlayerState.ENDED: return "ended";
-        case YT.PlayerState.PLAYING: return "playing";
-        case YT.PlayerState.PAUSED: return "paused";
-        case YT.PlayerState.BUFFERING: return "buffering";
-        case YT.PlayerState.CUED: return "cued";
-        default: return "unknown";
-      }
-    }
-
-    function queueOrRun(fn, reason = "Player pas encore prêt") {
-      if (playerReady && player) {
-        fn();
-        return;
-      }
-
-      pendingCommands.push(fn);
-      showDebug(reason);
-    }
-
-    function flushPendingCommands() {
-      if (!playerReady || !player || pendingCommands.length === 0) return;
-
-      const commands = [...pendingCommands];
-      pendingCommands = [];
-
-      for (const cmd of commands) {
-        try {
-          cmd();
-        } catch (err) {
-          console.error("Erreur commande en attente :", err);
-        }
-      }
-    }
-
-    function refreshCurrentVideoId() {
-      if (!player) return;
-
-      try {
-        const data = player.getVideoData?.();
-        if (data?.video_id) {
-          currentVideoId = data.video_id;
-        }
-      } catch (_) {}
-    }
-
-    function loadVideo(videoId, autoplay = false, startSeconds = 0) {
-      const id = extractVideoId(videoId);
-      if (!id) {
-        showDebug("videoId invalide");
-        notifyHost("playerError", {
-          error: "INVALID_VIDEO_ID",
-          input: videoId
-        });
-        return;
-      }
-
-      currentVideoId = id;
-
-      queueOrRun(() => {
-        const safeStartSeconds = Math.max(0, Number(startSeconds) || 0);
-
-        if (autoplay) {
-          player.loadVideoById({
+        if (isValidVideoId(id)) {
+          return {
+            type: "video",
             videoId: id,
-            startSeconds: safeStartSeconds
-          });
-        } else {
-          player.cueVideoById({
-            videoId: id,
-            startSeconds: safeStartSeconds
-          });
+            startSeconds: start
+          };
+        }
+      }
+
+      if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+        if (pathname === "/playlist" && list && isLikelyPlaylistId(list)) {
+          return {
+            type: "playlist",
+            playlistId: list,
+            videoId: isValidVideoId(v) ? v : null,
+            index,
+            startSeconds: start
+          };
         }
 
-        showDebug(`Vidéo chargée : ${id}`);
-        notifyHost("videoLoaded", {
+        if (list && isLikelyPlaylistId(list) && !v) {
+          return {
+            type: "playlist",
+            playlistId: list,
+            index,
+            startSeconds: start
+          };
+        }
+
+        if (list && isLikelyPlaylistId(list) && isValidVideoId(v)) {
+          return {
+            type: "playlist",
+            playlistId: list,
+            videoId: v,
+            index,
+            startSeconds: start
+          };
+        }
+
+        if (isValidVideoId(v)) {
+          return {
+            type: "video",
+            videoId: v,
+            startSeconds: start
+          };
+        }
+
+        const embedIndex = parts.indexOf("embed");
+        if (embedIndex !== -1 && parts[embedIndex + 1]) {
+          const id = parts[embedIndex + 1];
+          if (isValidVideoId(id)) {
+            if (list && isLikelyPlaylistId(list)) {
+              return {
+                type: "playlist",
+                playlistId: list,
+                videoId: id,
+                index,
+                startSeconds: start
+              };
+            }
+            return {
+              type: "video",
+              videoId: id,
+              startSeconds: start
+            };
+          }
+        }
+
+        const shortsIndex = parts.indexOf("shorts");
+        if (shortsIndex !== -1 && parts[shortsIndex + 1]) {
+          const id = parts[shortsIndex + 1];
+          if (isValidVideoId(id)) {
+            if (list && isLikelyPlaylistId(list)) {
+              return {
+                type: "playlist",
+                playlistId: list,
+                videoId: id,
+                index,
+                startSeconds: start
+              };
+            }
+            return {
+              type: "video",
+              videoId: id,
+              startSeconds: start
+            };
+          }
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  function getUrlConfig() {
+    const url = new URL(window.location.href);
+    const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    const hashParams = new URLSearchParams(hash);
+    const searchParams = url.searchParams;
+
+    const directPlaylistId =
+      searchParams.get("playlistId") ||
+      searchParams.get("list") ||
+      hashParams.get("playlistId") ||
+      hashParams.get("list");
+
+    const rawMedia =
+      searchParams.get("url") ||
+      hashParams.get("url") ||
+      searchParams.get("videoId") ||
+      searchParams.get("v") ||
+      hashParams.get("videoId") ||
+      hashParams.get("v") ||
+      directPlaylistId;
+
+    const media = extractMedia(rawMedia);
+
+    return {
+      media,
+      autoplay: parseBool(
+        searchParams.get("autoplay") ?? hashParams.get("autoplay"),
+        false
+      ),
+      startSeconds: parseNumber(
+        searchParams.get("start") ?? hashParams.get("start"),
+        media?.startSeconds || 0
+      ),
+      index: parseIndex(
+        searchParams.get("index") ?? hashParams.get("index"),
+        media?.index || 0
+      ),
+      mute: parseBool(
+        searchParams.get("mute") ?? hashParams.get("mute"),
+        false
+      ),
+      volume: clamp(
+        searchParams.get("volume") ?? hashParams.get("volume"),
+        0,
+        100,
+        100
+      )
+    };
+  }
+
+  function notifyHost(type, payload = {}) {
+    const message = { type, ...payload };
+
+    try {
+      window.parent.postMessage(message, "*");
+    } catch (_) {}
+
+    try {
+      window.postMessage(message, "*");
+    } catch (_) {}
+  }
+
+  function getPlayerStateName(state) {
+    if (!window.YT || !window.YT.PlayerState) return "unknown";
+
+    switch (state) {
+      case YT.PlayerState.UNSTARTED: return "unstarted";
+      case YT.PlayerState.ENDED: return "ended";
+      case YT.PlayerState.PLAYING: return "playing";
+      case YT.PlayerState.PAUSED: return "paused";
+      case YT.PlayerState.BUFFERING: return "buffering";
+      case YT.PlayerState.CUED: return "cued";
+      default: return "unknown";
+    }
+  }
+
+  function queueOrRun(fn, reason = "Player pas encore prêt") {
+    if (playerReady && player) {
+      fn();
+      return;
+    }
+
+    pendingCommands.push(fn);
+    showDebug(reason);
+  }
+
+  function flushPendingCommands() {
+    if (!playerReady || !player || pendingCommands.length === 0) return;
+
+    const commands = [...pendingCommands];
+    pendingCommands = [];
+
+    for (const cmd of commands) {
+      try {
+        cmd();
+      } catch (err) {
+        console.error("Erreur commande en attente :", err);
+      }
+    }
+  }
+
+  function refreshCurrentMedia() {
+    if (!player) return;
+
+    try {
+      const data = player.getVideoData?.();
+      if (data?.video_id) {
+        currentVideoId = data.video_id;
+      }
+    } catch (_) {}
+
+    try {
+      const playlist = player.getPlaylist?.();
+      const playlistId = player.getPlaylistId?.();
+
+      if (playlistId) {
+        currentPlaylistId = playlistId;
+        currentMediaType = "playlist";
+      } else if (Array.isArray(playlist) && playlist.length > 0) {
+        currentMediaType = "playlist";
+      } else if (currentVideoId) {
+        currentMediaType = "video";
+      }
+    } catch (_) {
+      if (currentVideoId && !currentPlaylistId) {
+        currentMediaType = "video";
+      }
+    }
+  }
+
+  function setCurrentVideo(videoId) {
+    currentMediaType = "video";
+    currentVideoId = videoId || null;
+    currentPlaylistId = null;
+  }
+
+  function setCurrentPlaylist(playlistId, videoId = null) {
+    currentMediaType = "playlist";
+    currentPlaylistId = playlistId || null;
+    currentVideoId = videoId || null;
+  }
+
+  function loadVideo(videoId, autoplay = false, startSeconds = 0) {
+    const media = extractMedia(videoId);
+    const id = media?.type === "video" ? media.videoId : null;
+
+    if (!id) {
+      showDebug("videoId invalide");
+      notifyHost("playerError", {
+        error: "INVALID_VIDEO_ID",
+        input: videoId
+      });
+      return;
+    }
+
+    setCurrentVideo(id);
+
+    queueOrRun(() => {
+      const safeStartSeconds = Math.max(0, Number(startSeconds) || 0);
+
+      if (autoplay) {
+        player.loadVideoById({
           videoId: id,
-          autoplay: !!autoplay,
           startSeconds: safeStartSeconds
         });
+      } else {
+        player.cueVideoById({
+          videoId: id,
+          startSeconds: safeStartSeconds
+        });
+      }
+
+      showDebug(`Vidéo chargée : ${id}`);
+      notifyHost("videoLoaded", {
+        mediaType: "video",
+        videoId: id,
+        autoplay: !!autoplay,
+        startSeconds: safeStartSeconds
       });
+    });
+  }
+
+  function loadPlaylist(playlistId, autoplay = false, startSeconds = 0, index = 0, videoId = null) {
+    const media =
+      typeof playlistId === "object" && playlistId !== null
+        ? playlistId
+        : extractMedia(playlistId);
+
+    const listId =
+      media?.type === "playlist"
+        ? media.playlistId
+        : (typeof playlistId === "string" && isLikelyPlaylistId(playlistId) ? playlistId : null);
+
+    if (!listId) {
+      showDebug("playlistId invalide");
+      notifyHost("playerError", {
+        error: "INVALID_PLAYLIST_ID",
+        input: playlistId
+      });
+      return;
     }
 
-    function playVideo() {
-      queueOrRun(() => {
-        player.playVideo();
-        refreshCurrentVideoId();
+    const safeStartSeconds = Math.max(
+      0,
+      Number(media?.startSeconds ?? startSeconds) || 0
+    );
+    const safeIndex = Math.max(
+      0,
+      Number(media?.index ?? index) || 0
+    );
+    const preferredVideoId =
+      media?.videoId && isValidVideoId(media.videoId)
+        ? media.videoId
+        : (videoId && isValidVideoId(videoId) ? videoId : null);
+
+    setCurrentPlaylist(listId, preferredVideoId);
+
+    queueOrRun(() => {
+      const payload = {
+        listType: "playlist",
+        list: listId,
+        index: safeIndex,
+        startSeconds: safeStartSeconds
+      };
+
+      if (autoplay) {
+        player.loadPlaylist(payload);
+      } else {
+        player.cuePlaylist(payload);
+      }
+
+      showDebug(`Playlist chargée : ${listId}`);
+      notifyHost("videoLoaded", {
+        mediaType: "playlist",
+        playlistId: listId,
+        videoId: preferredVideoId,
+        autoplay: !!autoplay,
+        startSeconds: safeStartSeconds,
+        index: safeIndex
       });
+    });
+  }
+
+  function loadMedia(input, autoplay = false, startSeconds = 0, index = 0) {
+    const media = extractMedia(input);
+
+    if (!media) {
+      showDebug("Media invalide");
+      notifyHost("playerError", {
+        error: "INVALID_MEDIA",
+        input
+      });
+      return;
     }
 
-    function pauseVideo() {
-      queueOrRun(() => {
-        player.pauseVideo();
-      });
+    if (media.type === "playlist") {
+      loadPlaylist(media, autoplay, startSeconds, index, media.videoId || null);
+      return;
     }
 
-    function stopVideo() {
-      queueOrRun(() => {
-        player.stopVideo();
-      });
-    }
+    loadVideo(media.videoId, autoplay, media.startSeconds ?? startSeconds);
+  }
 
-    function seekTo(seconds, allowSeekAhead = true) {
-      queueOrRun(() => {
-        player.seekTo(Math.max(0, Number(seconds) || 0), allowSeekAhead !== false);
-      });
-    }
+  function playVideo() {
+    queueOrRun(() => {
+      player.playVideo();
+      refreshCurrentMedia();
+    });
+  }
 
-    function mute() {
-      queueOrRun(() => {
-        player.mute();
-        notifyHost("muteChanged", { muted: true });
-      });
-    }
+  function pauseVideo() {
+    queueOrRun(() => {
+      player.pauseVideo();
+    });
+  }
 
-    function unmute() {
-      queueOrRun(() => {
+  function stopVideo() {
+    queueOrRun(() => {
+      player.stopVideo();
+    });
+  }
+
+  function seekTo(seconds, allowSeekAhead = true) {
+    queueOrRun(() => {
+      player.seekTo(Math.max(0, Number(seconds) || 0), allowSeekAhead !== false);
+    });
+  }
+
+  function mute() {
+    queueOrRun(() => {
+      player.mute();
+      notifyHost("muteChanged", { muted: true });
+    });
+  }
+
+  function unmute() {
+    queueOrRun(() => {
+      player.unMute();
+      notifyHost("muteChanged", { muted: false });
+    });
+  }
+
+  function toggleMute() {
+    queueOrRun(() => {
+      if (player.isMuted()) {
         player.unMute();
         notifyHost("muteChanged", { muted: false });
-      });
-    }
-
-    function toggleMute() {
-      queueOrRun(() => {
-        if (player.isMuted()) {
-          player.unMute();
-          notifyHost("muteChanged", { muted: false });
-        } else {
-          player.mute();
-          notifyHost("muteChanged", { muted: true });
-        }
-      });
-    }
-
-    function setVolume(volume) {
-      queueOrRun(() => {
-        const safeVolume = clamp(volume, 0, 100, 100);
-        player.setVolume(safeVolume);
-        notifyHost("volumeChanged", { volume: safeVolume });
-      });
-    }
-
-    function setPlaybackRate(rate) {
-      queueOrRun(() => {
-        const safeRate = Number(rate);
-        const availableRates = player.getAvailablePlaybackRates?.() || [];
-
-        if (!Number.isFinite(safeRate)) {
-          showDebug("Vitesse invalide");
-          return;
-        }
-
-        if (availableRates.length > 0 && !availableRates.includes(safeRate)) {
-          showDebug(`Vitesse indisponible : ${safeRate}`);
-          notifyHost("playerError", {
-            error: "INVALID_PLAYBACK_RATE",
-            requestedRate: safeRate,
-            availableRates
-          });
-          return;
-        }
-
-        player.setPlaybackRate(safeRate);
-        notifyHost("playbackRateChanged", { rate: safeRate });
-      });
-    }
-
-    function getStatus() {
-      queueOrRun(() => {
-        refreshCurrentVideoId();
-
-        let payload = {
-          videoId: currentVideoId,
-          ready: playerReady,
-          state: null,
-          stateName: "unknown",
-          currentTime: 0,
-          duration: 0,
-          volume: 100,
-          muted: false,
-          playbackRate: 1
-        };
-
-        try {
-          const state = player.getPlayerState?.();
-          payload.state = state;
-          payload.stateName = getPlayerStateName(state);
-        } catch (_) {}
-
-        try {
-          payload.currentTime = player.getCurrentTime?.() || 0;
-        } catch (_) {}
-
-        try {
-          payload.duration = player.getDuration?.() || 0;
-        } catch (_) {}
-
-        try {
-          payload.volume = player.getVolume?.() ?? 100;
-        } catch (_) {}
-
-        try {
-          payload.muted = !!player.isMuted?.();
-        } catch (_) {}
-
-        try {
-          payload.playbackRate = player.getPlaybackRate?.() ?? 1;
-        } catch (_) {}
-
-        notifyHost("playerStatus", payload);
-      });
-    }
-
-    function getCurrentTime() {
-      queueOrRun(() => {
-        notifyHost("playerCurrentTime", {
-          currentTime: player.getCurrentTime?.() || 0,
-          videoId: currentVideoId
-        });
-      });
-    }
-
-    function getDuration() {
-      queueOrRun(() => {
-        notifyHost("playerDuration", {
-          duration: player.getDuration?.() || 0,
-          videoId: currentVideoId
-        });
-      });
-    }
-
-    function handleIncomingMessage(data) {
-      if (!data || typeof data !== "object") return;
-
-      switch (data.action) {
-        case "load":
-          loadVideo(
-            data.videoId || data.url,
-            parseBool(data.autoplay, false),
-            parseNumber(data.startSeconds, 0)
-          );
-          break;
-
-        case "play":
-          playVideo();
-          break;
-
-        case "pause":
-          pauseVideo();
-          break;
-
-        case "stop":
-          stopVideo();
-          break;
-
-        case "seek":
-          seekTo(data.seconds, data.allowSeekAhead !== false);
-          break;
-
-        case "mute":
-          mute();
-          break;
-
-        case "unmute":
-          unmute();
-          break;
-
-        case "toggleMute":
-          toggleMute();
-          break;
-
-        case "setVolume":
-          setVolume(data.volume);
-          break;
-
-        case "setPlaybackRate":
-          setPlaybackRate(data.rate);
-          break;
-
-        case "status":
-          getStatus();
-          break;
-
-        case "getCurrentTime":
-          getCurrentTime();
-          break;
-
-        case "getDuration":
-          getDuration();
-          break;
-
-        default:
-          notifyHost("playerError", {
-            error: "UNKNOWN_ACTION",
-            action: data.action
-          });
-          break;
-      }
-    }
-
-    window.addEventListener("message", (event) => {
-      handleIncomingMessage(event.data);
-    });
-
-    window.addEventListener("hashchange", () => {
-      const config = getUrlConfig();
-      if (config.videoId) {
-        loadVideo(config.videoId, config.autoplay, config.startSeconds);
+      } else {
+        player.mute();
+        notifyHost("muteChanged", { muted: true });
       }
     });
+  }
 
-    window.onYouTubeIframeAPIReady = function () {
-      const initial = getUrlConfig();
+  function setVolume(volume) {
+    queueOrRun(() => {
+      const safeVolume = clamp(volume, 0, 100, 100);
+      player.setVolume(safeVolume);
+      notifyHost("volumeChanged", { volume: safeVolume });
+    });
+  }
 
-      player = new YT.Player("player", {
-        width: "100%",
-        height: "100%",
-        videoId: initial.videoId || undefined,
-        playerVars: {
-          autoplay: initial.videoId && initial.autoplay ? 1 : 0,
-          controls: 1,
-          disablekb: 0,
-          fs: 1,
-          playsinline: 1,
-          rel: 0,
-          modestbranding: 1,
-          enablejsapi: 1,
-          origin: getOrigin(),
-          start: Math.max(0, initial.startSeconds || 0)
-        },
-        events: {
-          onReady: () => {
-            playerReady = true;
-            refreshCurrentVideoId();
+  function setPlaybackRate(rate) {
+    queueOrRun(() => {
+      const safeRate = Number(rate);
+      const availableRates = player.getAvailablePlaybackRates?.() || [];
 
-            try {
-              player.setVolume(initial.volume);
-            } catch (_) {}
+      if (!Number.isFinite(safeRate)) {
+        showDebug("Vitesse invalide");
+        return;
+      }
 
-            try {
-              if (initial.mute) player.mute();
-              else player.unMute();
-            } catch (_) {}
+      if (availableRates.length > 0 && !availableRates.includes(safeRate)) {
+        showDebug(`Vitesse indisponible : ${safeRate}`);
+        notifyHost("playerError", {
+          error: "INVALID_PLAYBACK_RATE",
+          requestedRate: safeRate,
+          availableRates
+        });
+        return;
+      }
 
-            showDebug(`Player prêt : ${getOrigin()}`);
-            notifyHost("playerReady", {
-              origin: getOrigin(),
-              videoId: currentVideoId,
-              autoplay: !!initial.autoplay
-            });
+      player.setPlaybackRate(safeRate);
+      notifyHost("playbackRateChanged", { rate: safeRate });
+    });
+  }
 
-            flushPendingCommands();
+  function nextVideo() {
+    queueOrRun(() => {
+      if (typeof player.nextVideo === "function") {
+        player.nextVideo();
+      } else {
+        notifyHost("playerError", { error: "NEXT_NOT_SUPPORTED" });
+      }
+    });
+  }
 
-            if (!initial.autoplay) {
-              getStatus();
-            }
-          },
+  function previousVideo() {
+    queueOrRun(() => {
+      if (typeof player.previousVideo === "function") {
+        player.previousVideo();
+      } else {
+        notifyHost("playerError", { error: "PREVIOUS_NOT_SUPPORTED" });
+      }
+    });
+  }
 
-          onStateChange: (event) => {
-            refreshCurrentVideoId();
+  function playVideoAt(index) {
+    queueOrRun(() => {
+      const safeIndex = Math.max(0, Number(index) || 0);
+      if (typeof player.playVideoAt === "function") {
+        player.playVideoAt(safeIndex);
+      } else {
+        notifyHost("playerError", {
+          error: "PLAY_VIDEO_AT_NOT_SUPPORTED",
+          index: safeIndex
+        });
+      }
+    });
+  }
 
-            notifyHost("playerStateChange", {
-              state: event.data,
-              stateName: getPlayerStateName(event.data),
-              videoId: currentVideoId
-            });
-          },
+  function getStatus() {
+    queueOrRun(() => {
+      refreshCurrentMedia();
 
-          onError: (event) => {
-            showDebug(`Erreur YouTube : ${event.data}`);
-            notifyHost("playerError", {
-              error: event.data,
-              videoId: currentVideoId
-            });
-          }
+      let payload = {
+        mediaType: currentMediaType,
+        videoId: currentVideoId,
+        playlistId: currentPlaylistId,
+        ready: playerReady,
+        state: null,
+        stateName: "unknown",
+        currentTime: 0,
+        duration: 0,
+        volume: 100,
+        muted: false,
+        playbackRate: 1,
+        playlistIndex: null,
+        playlist: null
+      };
+
+      try {
+        const state = player.getPlayerState?.();
+        payload.state = state;
+        payload.stateName = getPlayerStateName(state);
+      } catch (_) {}
+
+      try {
+        payload.currentTime = player.getCurrentTime?.() || 0;
+      } catch (_) {}
+
+      try {
+        payload.duration = player.getDuration?.() || 0;
+      } catch (_) {}
+
+      try {
+        payload.volume = player.getVolume?.() ?? 100;
+      } catch (_) {}
+
+      try {
+        payload.muted = !!player.isMuted?.();
+      } catch (_) {}
+
+      try {
+        payload.playbackRate = player.getPlaybackRate?.() ?? 1;
+      } catch (_) {}
+
+      try {
+        if (typeof player.getPlaylistIndex === "function") {
+          payload.playlistIndex = player.getPlaylistIndex();
         }
+      } catch (_) {}
+
+      try {
+        if (typeof player.getPlaylist === "function") {
+          payload.playlist = player.getPlaylist();
+        }
+      } catch (_) {}
+
+      notifyHost("playerStatus", payload);
+    });
+  }
+
+  function getCurrentTime() {
+    queueOrRun(() => {
+      notifyHost("playerCurrentTime", {
+        currentTime: player.getCurrentTime?.() || 0,
+        mediaType: currentMediaType,
+        videoId: currentVideoId,
+        playlistId: currentPlaylistId
       });
+    });
+  }
+
+  function getDuration() {
+    queueOrRun(() => {
+      notifyHost("playerDuration", {
+        duration: player.getDuration?.() || 0,
+        mediaType: currentMediaType,
+        videoId: currentVideoId,
+        playlistId: currentPlaylistId
+      });
+    });
+  }
+
+  function handleIncomingMessage(data) {
+    if (!data || typeof data !== "object") return;
+
+    switch (data.action) {
+      case "load":
+        loadMedia(
+          data.playlistId || data.list || data.videoId || data.url,
+          parseBool(data.autoplay, false),
+          parseNumber(data.startSeconds, 0),
+          parseIndex(data.index, 0)
+        );
+        break;
+
+      case "loadPlaylist":
+        loadPlaylist(
+          data.playlistId || data.list || data.url,
+          parseBool(data.autoplay, false),
+          parseNumber(data.startSeconds, 0),
+          parseIndex(data.index, 0),
+          data.videoId || null
+        );
+        break;
+
+      case "loadVideo":
+        loadVideo(
+          data.videoId || data.url,
+          parseBool(data.autoplay, false),
+          parseNumber(data.startSeconds, 0)
+        );
+        break;
+
+      case "play":
+        playVideo();
+        break;
+
+      case "pause":
+        pauseVideo();
+        break;
+
+      case "stop":
+        stopVideo();
+        break;
+
+      case "seek":
+        seekTo(data.seconds, data.allowSeekAhead !== false);
+        break;
+
+      case "mute":
+        mute();
+        break;
+
+      case "unmute":
+        unmute();
+        break;
+
+      case "toggleMute":
+        toggleMute();
+        break;
+
+      case "setVolume":
+        setVolume(data.volume);
+        break;
+
+      case "setPlaybackRate":
+        setPlaybackRate(data.rate);
+        break;
+
+      case "next":
+        nextVideo();
+        break;
+
+      case "previous":
+        previousVideo();
+        break;
+
+      case "playVideoAt":
+        playVideoAt(data.index);
+        break;
+
+      case "status":
+        getStatus();
+        break;
+
+      case "getCurrentTime":
+        getCurrentTime();
+        break;
+
+      case "getDuration":
+        getDuration();
+        break;
+
+      default:
+        notifyHost("playerError", {
+          error: "UNKNOWN_ACTION",
+          action: data.action
+        });
+        break;
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    handleIncomingMessage(event.data);
+  });
+
+  window.addEventListener("hashchange", () => {
+    const config = getUrlConfig();
+    if (config.media) {
+      loadMedia(
+        config.media.playlistId || config.media.videoId,
+        config.autoplay,
+        config.startSeconds,
+        config.index
+      );
+    }
+  });
+
+  window.onYouTubeIframeAPIReady = function () {
+    const initial = getUrlConfig();
+
+    const playerVars = {
+      autoplay: initial.media && initial.autoplay ? 1 : 0,
+      controls: 1,
+      disablekb: 0,
+      fs: 1,
+      playsinline: 1,
+      rel: 0,
+      modestbranding: 1,
+      enablejsapi: 1,
+      origin: getOrigin(),
+      start: Math.max(0, initial.startSeconds || 0)
     };
 
-    const tag = document.createElement("script");
-    tag.src = "https://www.youtube.com/iframe_api";
-    document.head.appendChild(tag);
-  </script>
+    const playerOptions = {
+      width: "100%",
+      height: "100%",
+      playerVars,
+      events: {
+        onReady: () => {
+          playerReady = true;
+          refreshCurrentMedia();
+
+          try {
+            player.setVolume(initial.volume);
+          } catch (_) {}
+
+          try {
+            if (initial.mute) player.mute();
+            else player.unMute();
+          } catch (_) {}
+
+          showDebug(`Player prêt : ${getOrigin()}`);
+          notifyHost("playerReady", {
+            origin: getOrigin(),
+            mediaType: currentMediaType,
+            videoId: currentVideoId,
+            playlistId: currentPlaylistId,
+            autoplay: !!initial.autoplay
+          });
+
+          flushPendingCommands();
+
+          if (!initial.autoplay) {
+            getStatus();
+          }
+        },
+
+        onStateChange: (event) => {
+          refreshCurrentMedia();
+
+          notifyHost("playerStateChange", {
+            state: event.data,
+            stateName: getPlayerStateName(event.data),
+            mediaType: currentMediaType,
+            videoId: currentVideoId,
+            playlistId: currentPlaylistId
+          });
+        },
+
+        onError: (event) => {
+          showDebug(`Erreur YouTube : ${event.data}`);
+          notifyHost("playerError", {
+            error: event.data,
+            mediaType: currentMediaType,
+            videoId: currentVideoId,
+            playlistId: currentPlaylistId
+          });
+        }
+      }
+    };
+
+    if (initial.media?.type === "playlist") {
+      currentMediaType = "playlist";
+      currentPlaylistId = initial.media.playlistId || null;
+      currentVideoId = initial.media.videoId || null;
+
+      playerOptions.playerVars.listType = "playlist";
+      playerOptions.playerVars.list = initial.media.playlistId;
+      playerOptions.playerVars.index = Math.max(0, initial.index || 0);
+
+      if (initial.media.videoId) {
+        playerOptions.videoId = initial.media.videoId;
+      }
+    } else if (initial.media?.type === "video") {
+      currentMediaType = "video";
+      currentVideoId = initial.media.videoId || null;
+      currentPlaylistId = null;
+      playerOptions.videoId = initial.media.videoId || undefined;
+    }
+
+    player = new YT.Player("player", playerOptions);
+  };
+
+  const tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+</script>
 </body>
 </html>
