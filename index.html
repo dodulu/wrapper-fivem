@@ -537,8 +537,11 @@
   }
 
   function loadMedia(input, autoplay = false, startSeconds = 0, index = 0) {
-    const media = extractMedia(input);
-
+      const media =
+      typeof input === "object" && input !== null
+        ? input
+        : extractMedia(input);
+  
     if (!media) {
       showDebug("Media invalide");
       notifyHost("playerError", {
@@ -547,12 +550,12 @@
       });
       return;
     }
-
+  
     if (media.type === "playlist") {
       loadPlaylist(media, autoplay, startSeconds, index, media.videoId || null);
       return;
     }
-
+  
     loadVideo(media.videoId, autoplay, media.startSeconds ?? startSeconds);
   }
 
@@ -866,7 +869,7 @@
     const config = getUrlConfig();
     if (config.media) {
       loadMedia(
-        config.media.playlistId || config.media.videoId,
+        config.media,
         config.autoplay,
         config.startSeconds,
         config.index
