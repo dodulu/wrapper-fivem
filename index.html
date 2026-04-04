@@ -358,7 +358,7 @@
         },
         events: {
           onReady: () => {
-            playerReady = true;
+            playerReady = false;
             try {
               const data = player.getVideoData?.();
               if (data?.video_id) currentVideoId = data.video_id;
